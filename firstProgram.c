@@ -6,10 +6,14 @@ typedef struct _PipelineData
     GstElement *source;
 
     GstElement *video_convert;
-    GstElement *video_sink;
+    GstElement *video_rate;
+
+    GstElement *encoder;
+    GstElement *payloader;
+    GstElement *udp_sink;
 } PipelineData;
 
-// Dynamic linking callback
+// Dynamic Pad linking callback
 void pad_added_handler(GstElement *src, GstPad *new_pad, PipelineData *data)
 {
     GstPad *video_sink_pad = gst_element_get_static_pad(data->video_convert, "sink");
@@ -25,7 +29,6 @@ void pad_added_handler(GstElement *src, GstPad *new_pad, PipelineData *data)
     {
         // Check the new pad's type
         GstCaps *new_pad_caps = gst_pad_get_current_caps(new_pad);
-        ;
         GstStructure *new_pad_struct = gst_caps_get_structure(new_pad_caps, 0);
         const gchar *new_pad_type = gst_structure_get_name(new_pad_struct);
 
@@ -46,8 +49,6 @@ void pad_added_handler(GstElement *src, GstPad *new_pad, PipelineData *data)
         {
             g_print("It has type '%s' which is not raw video. Ignoring.\n", new_pad_type);
         }
-
-        gst_caps_unref(new_pad_caps);
     }
 
     // Release sink pad
@@ -64,25 +65,45 @@ int main(int argc, char *argv[])
     // Create the elements
     data.source = gst_element_factory_make("uridecodebin", "source");
     data.video_convert = gst_element_factory_make("videoconvert", "video_convert");
-    data.video_sink = gst_element_factory_make("autovideosink", "video_sink");
+    data.video_rate = gst_element_factory_make("videorate", "video_rate");
+
+    data.encoder = gst_element_factory_make("x264enc", "encoder");
+    data.payloader = gst_element_factory_make("rtph264pay", "payloader");
+    data.udp_sink = gst_element_factory_make("udpsink", "udp_sink");
+    g_object_set(data.udp_sink, "host", "localhost", "port", 5004, NULL); // This line shouldn't actually change anything (it just (re)sets default settings)
 
     // Create the pipeline
     data.pipeline = gst_pipeline_new("data-pipeline");
-    if (!data.pipeline || !data.source || !data.video_convert || !data.video_sink)
+    if (!data.pipeline ||
+        !data.source ||
+        !data.video_convert ||
+        !data.video_rate ||
+        !data.udp_sink)
     {
         g_printerr("Not all elements could be created.\n");
-        g_printerr("%d%d%d\n",
+        g_printerr("%d%d%d%d%d%d%d\n",
                    (int)(0 == data.pipeline),
                    (int)(0 == data.source),
-                   (int)(0 == data.video_convert));
+                   (int)(0 == data.video_convert),
+                   (int)(0 == data.video_rate),
+                   (int)(0 == data.encoder),
+                   (int)(0 == data.payloader),
+                   (int)(0 == data.udp_sink));
         return -1;
     }
 
-    gst_bin_add(GST_BIN(data.pipeline), data.source);
+    // Add to the pipeline
+    gst_bin_add(GST_BIN(data.pipeline), data.source); // Source
+    gst_bin_add_many(GST_BIN(data.pipeline), // UDP (Video)
+                     data.video_convert,
+                     data.video_rate,
+                     data.encoder,
+                     data.payloader,
+                     data.udp_sink,
+                     NULL);
 
-    // Link the pipeline (source must be linked dynamically)
-    gst_bin_add_many(GST_BIN(data.pipeline), data.video_convert, data.video_sink, NULL);
-    if (!gst_element_link_many(data.video_convert, data.video_sink, NULL))
+    // Link UDP (Video)
+    if (!gst_element_link_many(data.video_convert, data.video_rate, data.encoder, data.payloader, data.udp_sink, NULL))
     {
         g_printerr("Video elements could not be linked.\n");
         gst_object_unref(data.pipeline);
@@ -90,7 +111,8 @@ int main(int argc, char *argv[])
     }
 
     // Set the URI to play
-    g_object_set(data.source, "uri", "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm", NULL);
+    // g_object_set(data.source, "uri", "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm", NULL);
+    g_object_set(data.source, "uri", "https://media.githubusercontent.com/media/Haxerus/test-video-repo/master/test_video.webm", NULL);
 
     // Add pad_added_handler callback (dynamic pad linknig)
     g_signal_connect(data.source, "pad-added", G_CALLBACK(pad_added_handler), &data);
