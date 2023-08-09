@@ -6,7 +6,9 @@ typedef struct _PipelineData
     GstElement *source;
 
     GstElement *video_convert;
-    GstElement *video_rate;
+    GstElement *video_resize;    
+    GstElement *video_resize_capsfilter;    
+    GstElement *video_rate;    
 
     GstElement *encoder;
     GstElement *payloader;
@@ -65,11 +67,23 @@ int main(int argc, char *argv[])
     // Create the elements
     data.source = gst_element_factory_make("uridecodebin", "source");
     data.video_convert = gst_element_factory_make("videoconvert", "video_convert");
+    data.video_resize = gst_element_factory_make("videoscale", "video_resize");
+    data.video_resize_capsfilter = gst_element_factory_make("capsfilter", "video_resize_capsfilter");
     data.video_rate = gst_element_factory_make("videorate", "video_rate");
 
     data.encoder = gst_element_factory_make("x264enc", "encoder");
     data.payloader = gst_element_factory_make("rtph264pay", "payloader");
     data.udp_sink = gst_element_factory_make("udpsink", "udp_sink");
+
+    // Resize video (I'm writing this on a linux vm and I don't have enough video memory to dispay the full resolution
+    // since VirtualBox limits the maximum allocatable vram)
+    GstCaps *caps = gst_caps_new_simple("video/x-raw",
+                                         "width", G_TYPE_INT, 640, // 360p
+                                         "height", G_TYPE_INT, 360,
+                                         NULL);
+    g_object_set(data.video_resize_capsfilter, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
     g_object_set(data.udp_sink, "host", "localhost", "port", 5004, NULL); // This line shouldn't actually change anything (it just (re)sets default settings)
 
     // Create the pipeline
@@ -77,14 +91,18 @@ int main(int argc, char *argv[])
     if (!data.pipeline ||
         !data.source ||
         !data.video_convert ||
+        !data.video_resize ||
+        !data.video_resize_capsfilter ||
         !data.video_rate ||
         !data.udp_sink)
     {
         g_printerr("Not all elements could be created.\n");
-        g_printerr("%d%d%d%d%d%d%d\n",
+        g_printerr("%d%d%d%d%d%d%d%d%d\n",
                    (int)(0 == data.pipeline),
                    (int)(0 == data.source),
                    (int)(0 == data.video_convert),
+                   (int)(0 == data.video_resize),
+                   (int)(0 == data.video_resize_capsfilter),
                    (int)(0 == data.video_rate),
                    (int)(0 == data.encoder),
                    (int)(0 == data.payloader),
@@ -96,6 +114,8 @@ int main(int argc, char *argv[])
     gst_bin_add(GST_BIN(data.pipeline), data.source); // Source
     gst_bin_add_many(GST_BIN(data.pipeline), // UDP (Video)
                      data.video_convert,
+                     data.video_resize,
+                     data.video_resize_capsfilter,
                      data.video_rate,
                      data.encoder,
                      data.payloader,
@@ -103,7 +123,7 @@ int main(int argc, char *argv[])
                      NULL);
 
     // Link UDP (Video)
-    if (!gst_element_link_many(data.video_convert, data.video_rate, data.encoder, data.payloader, data.udp_sink, NULL))
+    if (!gst_element_link_many(data.video_convert, data.video_resize, data.video_resize_capsfilter, data.video_rate, data.encoder, data.payloader, data.udp_sink, NULL))
     {
         g_printerr("Video elements could not be linked.\n");
         gst_object_unref(data.pipeline);
@@ -111,7 +131,6 @@ int main(int argc, char *argv[])
     }
 
     // Set the URI to play
-    // g_object_set(data.source, "uri", "https://gstreamer.freedesktop.org/data/media/sintel_trailer-480p.webm", NULL);
     g_object_set(data.source, "uri", "https://media.githubusercontent.com/media/Haxerus/test-video-repo/master/test_video.webm", NULL);
 
     // Add pad_added_handler callback (dynamic pad linknig)
